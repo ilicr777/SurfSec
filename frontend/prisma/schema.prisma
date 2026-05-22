@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Agency {
+  id           String       @id @default(uuid())
+  name         String
+  scan_credits Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  users        User[]
+  scans        ScanReport[]
+}
+
+model User {
+  id        String       @id @default(uuid())
+  email     String       @unique
+  name      String?
+  password  String?
+  agencyId  String?
+  agency    Agency?      @relation(fields: [agencyId], references: [id])
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  scans     ScanReport[]
+}
+
+model ScanReport {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agencyId   String?
+  agency     Agency?  @relation(fields: [agencyId], references: [id])
+  total      Int
+  successful Int
+  failed     Int
+  results    Json
+  errors     Json
+  createdAt  DateTime @default(now())
+}
