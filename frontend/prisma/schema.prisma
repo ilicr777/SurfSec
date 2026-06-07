@@ -35,9 +35,18 @@ model ScanReport {
   agencyId   String?
   agency     Agency?  @relation(fields: [agencyId], references: [id])
   total      Int
-  successful Int
-  failed     Int
-  results    Json
-  errors     Json
+  successful Int      @default(0)
+  failed     Int      @default(0)
+  status     String   @default("PENDING")
+  results    Json?
+  errors     Json?
   createdAt  DateTime @default(now())
+}
+
+model StripeEvent {
+  id           String   @id
+  type         String
+  agencyId     String?
+  creditsAdded Int      @default(0)
+  processedAt  DateTime @default(now())
 }

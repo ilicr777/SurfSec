@@ -27,6 +27,9 @@ import random
 from datetime import datetime, timezone
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import dns.resolver
 import httpx
 from pydantic import BaseModel, Field
@@ -43,6 +46,9 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────
+
+MOCK_ENVIRONMENT: bool = os.getenv("MOCK_ENVIRONMENT", "").lower() == "true"
+
 
 SHODAN_API_KEY: str = os.getenv("SHODAN_API_KEY", "")
 SHODAN_BASE_URL: str = "https://api.shodan.io"
@@ -525,12 +531,85 @@ class DomainEnricher:
         self._client = client
         self._loop = asyncio.get_event_loop()
 
+    async def _mock_enrich_single(self, domain: str) -> EnrichedDomainReport:
+        """
+        Returns a realistic but static simulated payload for any domain,
+        without hitting any external APIs when MOCK_ENVIRONMENT is active.
+        """
+        logger.info("[%s] Mocking enrichment (MOCK_ENVIRONMENT=true)", domain)
+        await asyncio.sleep(0.1)  # Minimal realistic delay
+
+        dns_info = DnsInfo(
+            a_records=["192.168.1.100", "10.0.0.5"],
+            mx_records=[f"mail.{domain}"],
+            txt_records=["v=spf1 include:_spf.google.com ~all"],
+            error=None
+        )
+
+        shodan_info = ShodanInfo(
+            ip="192.168.1.100",
+            country="IT",
+            org="Mock Telecommunications SpA",
+            open_ports=[
+                PortInfo(port=80, protocol="tcp", banner="nginx/1.18.0", transport="tcp"),
+                PortInfo(port=443, protocol="tcp", banner="nginx/1.18.0 (SSL)", transport="tcp")
+            ],
+            error=None
+        )
+
+        cve_info = CveInfo(
+            entries=[
+                CveEntry(
+                    cve_id="CVE-2021-23017",
+                    cvss=7.5,
+                    summary="An off-by-one error in nginx resolver component allows local attackers to cause segment fault or execute arbitrary code.",
+                    severity="HIGH",
+                    source_banner="nginx/1.18.0"
+                ),
+                CveEntry(
+                    cve_id="CVE-2020-1967",
+                    cvss=5.3,
+                    summary="OpenSSL SSL_check_chain vulnerability leads to segment fault or denial of service.",
+                    severity="MEDIUM",
+                    source_banner="nginx/1.18.0 (SSL)"
+                )
+            ],
+            error=None
+        )
+
+        emails = [
+            f"info@{domain}",
+            f"security@{domain}"
+        ]
+
+        cold_email = (
+            f"Oggetto: Rilevate vulnerabilità di sicurezza critiche su {domain}\n\n"
+            f"Gentile Team di {domain},\n\n"
+            f"Abbiamo riscontrato che il vostro server nginx/1.18.0 presenta le seguenti vulnerabilità:\n"
+            f"- CVE-2021-23017 (Severità: HIGH)\n"
+            f"- CVE-2020-1967 (Severità: MEDIUM)\n\n"
+            f"Consigliamo di aggiornare i pacchetti software per proteggere i vostri asset digitali.\n\n"
+            f"Cordiali saluti,\nSurfSec Security Team"
+        )
+
+        return EnrichedDomainReport(
+            domain=domain,
+            dns=dns_info,
+            shodan=shodan_info,
+            cve=cve_info,
+            emails=emails,
+            cold_email_template=cold_email,
+        )
+
     async def _enrich_single(self, domain: str) -> EnrichedDomainReport:
         """
         Full enrichment pipeline for one domain.
         DNS → Shodan → CVE (each step may depend on the previous one's result).
         """
         logger.info("[%s] Starting enrichment", domain)
+
+        if MOCK_ENVIRONMENT:
+            return await self._mock_enrich_single(domain)
 
         dns_info = await _resolve_dns(domain, self._loop)
         logger.debug("[%s] DNS: %s", domain, dns_info)

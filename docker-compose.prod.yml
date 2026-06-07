@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: surfsec-db-prod
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: surfsec
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Hardening: Database port is NOT exposed to the host/public internet.
+    # It is only accessible to other containers within the same Docker network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: surfsec-backend-prod
+    environment:
+      - SHODAN_API_KEY=${SHODAN_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - MAX_CONCURRENT_DOMAINS=${MAX_CONCURRENT_DOMAINS:-10}
+      - MOCK_ENVIRONMENT=false
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db:5432/surfsec?schema=public
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+    # Hardening: Backend FastAPI is NOT exposed publicly.
+    # Access is mediated entirely by the Nginx reverse proxy.
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: surfsec-frontend-prod
+    environment:
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db:5432/surfsec?schema=public
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - FASTAPI_URL=http://backend:8000
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+    # Hardening: Next.js is kept internal, accessible only via Nginx.
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    restart: always
+
+  proxy:
+    image: nginx:1.25-alpine
+    container_name: surfsec-nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certbot/conf:/etc/letsencrypt:ro
+      - ./nginx/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - frontend
+      - backend
+    restart: always
+
+  certbot:
+    image: certbot/certbot
+    container_name: surfsec-certbot
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    # Automated SSL Hardening: Periodic certificate check and renewal loop (every 12h)
+    entrypoint: "/bin/sh -c 'trap exit 0 SIGTERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    depends_on:
+      - proxy
+    restart: always
+
+volumes:
+  postgres_data:
